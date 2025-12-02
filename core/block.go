@@ -34,3 +34,28 @@ func DeserializeBlock(data []byte) *Block {
 	return &block
 }
 
+func (b *Block) HashTransactions() []byte {
+	txHashes := make([][]byte, 0, len(b.Transactions))
+	for _, tx := range b.Transactions {
+		txHashes = append(txHashes, tx.ID)
+	}
+	tree := NewMerkleTree(txHashes)
+	return tree.RootNode.Data
+}
+
+func NewBlock(transactions []*Transaction, prevBlockHash []byte) *Block {
+	block := &Block{
+		Timestamp:     time.Now().Unix(),
+		Transactions:  transactions,
+		PrevBlockHash: prevBlockHash,
+		Hash:          nil,
+		Nonce:         0,
+		MerkleRoot:    nil,
+	}
+	block.MerkleRoot = block.HashTransactions()
+	pow := NewProofOfWork(block)
+	nonce, hash := pow.Run()
+	block.Nonce = nonce
+	block.Hash = hash
+	return block
+}
