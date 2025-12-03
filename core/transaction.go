@@ -62,3 +62,20 @@ func NewTxOutput(value int, address string) *TxOutput {
 	return out
 }
 
+func (tx *Transaction) IsCoinbase() bool {
+	return len(tx.Vin) == 1 && len(tx.Vin[0].Txid) == 0 && tx.Vin[0].Vout == -1
+}
+
+func CoinbaseTx(to, data string) *Transaction {
+	if data == "" {
+		data = fmt.Sprintf("Coinbase to %s", to)
+	}
+
+	txin := TxInput{Txid: []byte{}, Vout: -1, Signature: nil, PubKey: []byte(data)}
+	txout := *NewTxOutput(subsidy, to)
+
+	tx := &Transaction{ID: nil, Vin: []TxInput{txin}, Vout: []TxOutput{txout}}
+	tx.ID = tx.Hash()
+	return tx
+}
+
