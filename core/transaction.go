@@ -108,3 +108,30 @@ func (tx *Transaction) TrimmedCopy() Transaction {
 	return Transaction{ID: tx.ID, Vin: inputs, Vout: outputs}
 }
 
+func (tx *Transaction) Sign(privKey *ecdsa.PrivateKey, prevTXs map[string]Transaction) {
+	if tx.IsCoinbase() {
+		return
+	}
+
+	for _, vin := range tx.Vin {
+		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil {
+			log.Panic("previous transaction is not correct")
+		}
+	}
+
+	txCopy := tx.TrimmedCopy()
+	for inID, vin := range txCopy.Vin {
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		txCopy.Vin[inID].Signature = nil
+		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
+		txCopy.ID = txCopy.Hash()
+		txCopy.Vin[inID].PubKey = nil
+
+		sig, err := ecdsa.SignASN1(rand.Reader, privKey, txCopy.ID)
+		if err != nil {
+			log.Panic(err)
+		}
+		tx.Vin[inID].Signature = sig
+	}
+}
+
