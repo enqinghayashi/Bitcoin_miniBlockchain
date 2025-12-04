@@ -79,3 +79,32 @@ func CoinbaseTx(to, data string) *Transaction {
 	return tx
 }
 
+func (tx *Transaction) Serialize() []byte {
+	var encoded bytes.Buffer
+	enc := gob.NewEncoder(&encoded)
+	if err := enc.Encode(tx); err != nil {
+		log.Panic(err)
+	}
+	return encoded.Bytes()
+}
+
+func (tx *Transaction) Hash() []byte {
+	txCopy := *tx
+	txCopy.ID = nil
+
+	hash := sha256.Sum256(txCopy.Serialize())
+	return hash[:]
+}
+
+func (tx *Transaction) TrimmedCopy() Transaction {
+	inputs := make([]TxInput, 0, len(tx.Vin))
+	for _, vin := range tx.Vin {
+		inputs = append(inputs, TxInput{Txid: vin.Txid, Vout: vin.Vout, Signature: nil, PubKey: nil})
+	}
+	outputs := make([]TxOutput, 0, len(tx.Vout))
+	for _, vout := range tx.Vout {
+		outputs = append(outputs, TxOutput{Value: vout.Value, PubKeyHash: vout.PubKeyHash})
+	}
+	return Transaction{ID: tx.ID, Vin: inputs, Vout: outputs}
+}
+
