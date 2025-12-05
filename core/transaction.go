@@ -135,3 +135,57 @@ func (tx *Transaction) Sign(privKey *ecdsa.PrivateKey, prevTXs map[string]Transa
 	}
 }
 
+func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
+	if tx.IsCoinbase() {
+		return true
+	}
+
+	for _, vin := range tx.Vin {
+		if prevTXs[hex.EncodeToString(vin.Txid)].ID == nil {
+			log.Panic("previous transaction is not correct")
+		}
+	}
+
+	txCopy := tx.TrimmedCopy()
+	curve := elliptic.P256()
+
+	for inID, vin := range tx.Vin {
+		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
+		txCopy.Vin[inID].Signature = nil
+		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
+		txCopy.ID = txCopy.Hash()
+		txCopy.Vin[inID].PubKey = nil
+
+		x, y := elliptic.Unmarshal(curve, vin.PubKey)
+		if x == nil {
+			return false
+		}
+		pubKey := ecdsa.PublicKey{Curve: curve, X: x, Y: y}
+		if !ecdsa.VerifyASN1(&pubKey, txCopy.ID, vin.Signature) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (tx *Transaction) String() string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("--- Transaction %x", tx.ID))
+
+	for i, input := range tx.Vin {
+		lines = append(lines, fmt.Sprintf("  Input %d:", i))
+		lines = append(lines, fmt.Sprintf("    TXID: %x", input.Txid))
+		lines = append(lines, fmt.Sprintf("    Out:  %d", input.Vout))
+		lines = append(lines, fmt.Sprintf("    Sig:  %x", input.Signature))
+		lines = append(lines, fmt.Sprintf("    Pub:  %x", input.PubKey))
+	}
+
+	for i, output := range tx.Vout {
+		lines = append(lines, fmt.Sprintf("  Output %d:", i))
+		lines = append(lines, fmt.Sprintf("    Value:  %d", output.Value))
+		lines = append(lines, fmt.Sprintf("    Script: %x", output.PubKeyHash))
+	}
+
+	return strings.Join(lines, "\n")
+}
