@@ -40,3 +40,80 @@ type Blockchain struct {
 	tip []byte
 }
 
+func NewGenesisBlock(coinbase *Transaction) *Block {
+	genesis := &Block{
+		Timestamp:     0,
+		Transactions:  []*Transaction{coinbase},
+		PrevBlockHash: []byte{},
+		Hash:          nil,
+		Nonce:         0,
+		MerkleRoot:    nil,
+	}
+	genesis.MerkleRoot = genesis.HashTransactions()
+	pow := NewProofOfWork(genesis)
+	nonce, hash := pow.Run()
+	genesis.Nonce = nonce
+	genesis.Hash = hash
+	return genesis
+}
+
+func dbExists(nodeID string) bool {
+	_, err := os.Stat(nodeDBFile(nodeID))
+	return err == nil
+}
+
+// DBExists reports whether the blockchain database file exists.
+func DBExists(nodeID string) bool {
+	return dbExists(nodeID)
+}
+
+// CreateBlockchain initializes a brand-new blockchain database.
+func CreateBlockchain(address string) *Blockchain {
+	if !wallet.ValidateAddress(address) {
+		log.Panic("invalid address")
+	}
+	return CreateBlockchainForNode(address, os.Getenv("NODE_ID"))
+}
+
+func CreateBlockchainForNode(address string, nodeID string) *Blockchain {
+	if !wallet.ValidateAddress(address) {
+		log.Panic("invalid address")
+	}
+	if dbExists(nodeID) {
+		log.Panic("blockchain database already exists")
+	}
+
+	db, err := openDB(nodeID)
+	if err != nil {
+		if errors.Is(err, bbolt.ErrTimeout) {
+			log.Panicf("failed to open blockchain DB %q: timeout (if a node is running with the same NODE_ID, stop it and retry)", nodeDBFile(nodeID))
+		}
+		log.Panic(err)
+	}
+
+	var tip []byte
+	err = db.Update(func(tx *bbolt.Tx) error {
+		b, createErr := tx.CreateBucket([]byte(blocksBucket))
+		if createErr != nil {
+			return createErr
+		}
+
+		coinbase := CoinbaseTx(address, "Genesis")
+		genesis := NewGenesisBlock(coinbase)
+		if putErr := b.Put(genesis.Hash, genesis.Serialize()); putErr != nil {
+			return putErr
+		}
+		if putErr := b.Put([]byte(lastHashKey), genesis.Hash); putErr != nil {
+			return putErr
+		}
+		tip = genesis.Hash
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return &Blockchain{db: db, tip: tip}
+}
+
+// OpenBlockchain opens an existing blockchain database.
