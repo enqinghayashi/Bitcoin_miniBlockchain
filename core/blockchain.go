@@ -117,3 +117,98 @@ func CreateBlockchainForNode(address string, nodeID string) *Blockchain {
 }
 
 // OpenBlockchain opens an existing blockchain database.
+func OpenBlockchain() *Blockchain {
+	return OpenBlockchainForNode(os.Getenv("NODE_ID"))
+}
+
+func OpenBlockchainForNode(nodeID string) *Blockchain {
+	if !dbExists(nodeID) {
+		log.Panic("no existing blockchain database found; run createblockchain first")
+	}
+
+	db, err := openDB(nodeID)
+	if err != nil {
+		if errors.Is(err, bbolt.ErrTimeout) {
+			log.Panicf("failed to open blockchain DB %q: timeout (if a node is running with the same NODE_ID, stop it and retry)", nodeDBFile(nodeID))
+		}
+		log.Panic(err)
+	}
+
+	var tip []byte
+	err = db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			log.Panic("blockchain database is missing blocks bucket")
+		}
+		tip = b.Get([]byte(lastHashKey))
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return &Blockchain{db: db, tip: tip}
+}
+
+// OpenBlockchainReadOnlyForNode opens an existing blockchain database in read-only mode.
+// This allows commands like printchain/getbalance to run while a node process is running.
+func OpenBlockchainReadOnlyForNode(nodeID string) *Blockchain {
+	if !dbExists(nodeID) {
+		log.Panic("no existing blockchain database found; run createblockchain first")
+	}
+
+	db, err := openDBReadOnly(nodeID)
+	if err != nil {
+		if errors.Is(err, bbolt.ErrTimeout) {
+			log.Panicf("failed to open blockchain DB %q: timeout (if a node is running with the same NODE_ID, stop it and retry)", nodeDBFile(nodeID))
+		}
+		log.Panic(err)
+	}
+
+	var tip []byte
+	err = db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			log.Panic("blockchain database is missing blocks bucket")
+		}
+		tip = b.Get([]byte(lastHashKey))
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return &Blockchain{db: db, tip: tip}
+}
+
+// InitBlockchainForNode opens the DB for a node and ensures the bucket exists.
+// It does NOT create a genesis block. Used by networking nodes that will sync from peers.
+func InitBlockchainForNode(nodeID string) *Blockchain {
+	db, err := openDB(nodeID)
+	if err != nil {
+		if errors.Is(err, bbolt.ErrTimeout) {
+			log.Panicf("failed to open blockchain DB %q: timeout (if a node is running with the same NODE_ID, stop it and retry)", nodeDBFile(nodeID))
+		}
+		log.Panic(err)
+	}
+
+	var tip []byte
+	err = db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			var createErr error
+			b, createErr = tx.CreateBucket([]byte(blocksBucket))
+			if createErr != nil {
+				return createErr
+			}
+		}
+		tip = b.Get([]byte(lastHashKey))
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	return &Blockchain{db: db, tip: tip}
+}
+
