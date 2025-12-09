@@ -260,3 +260,45 @@ func (bc *Blockchain) AddBlock(transactions []*Transaction) []byte {
 	return newBlock.Hash
 }
 
+func (bc *Blockchain) FindTransaction(ID []byte) (Transaction, error) {
+	it := bc.Iterator()
+	for {
+		block := it.Next()
+		for _, tx := range block.Transactions {
+			if bytes.Equal(tx.ID, ID) {
+				return *tx, nil
+			}
+		}
+		if len(block.PrevBlockHash) == 0 {
+			break
+		}
+	}
+	return Transaction{}, errors.New("transaction not found")
+}
+
+func (bc *Blockchain) SignTransaction(tx *Transaction, privKey *ecdsa.PrivateKey) {
+	prevTXs := make(map[string]Transaction)
+	for _, vin := range tx.Vin {
+		prevTx, err := bc.FindTransaction(vin.Txid)
+		if err != nil {
+			log.Panic(err)
+		}
+		prevTXs[hex.EncodeToString(prevTx.ID)] = prevTx
+	}
+	tx.Sign(privKey, prevTXs)
+}
+
+func (bc *Blockchain) VerifyTransaction(tx *Transaction) bool {
+	if tx.IsCoinbase() {
+		return true
+	}
+	prevTXs := make(map[string]Transaction)
+	for _, vin := range tx.Vin {
+		prevTx, err := bc.FindTransaction(vin.Txid)
+		if err != nil {
+			log.Panic(err)
+		}
+		prevTXs[hex.EncodeToString(prevTx.ID)] = prevTx
+	}
+	return tx.Verify(prevTXs)
+}
