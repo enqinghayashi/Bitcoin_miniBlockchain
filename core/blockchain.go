@@ -212,3 +212,51 @@ func InitBlockchainForNode(nodeID string) *Blockchain {
 	return &Blockchain{db: db, tip: tip}
 }
 
+func (bc *Blockchain) Close() error {
+	if bc.db == nil {
+		return nil
+	}
+	return bc.db.Close()
+}
+
+func (bc *Blockchain) Tip() []byte {
+	return bc.tip
+}
+
+func (bc *Blockchain) AddBlock(transactions []*Transaction) []byte {
+	for _, tx := range transactions {
+		if !bc.VerifyTransaction(tx) {
+			log.Panic("invalid transaction")
+		}
+	}
+
+	var lastHash []byte
+
+	err := bc.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		lastHash = b.Get([]byte(lastHashKey))
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+
+	newBlock := NewBlock(transactions, lastHash)
+
+	err = bc.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if putErr := b.Put(newBlock.Hash, newBlock.Serialize()); putErr != nil {
+			return putErr
+		}
+		if putErr := b.Put([]byte(lastHashKey), newBlock.Hash); putErr != nil {
+			return putErr
+		}
+		bc.tip = newBlock.Hash
+		return nil
+	})
+	if err != nil {
+		log.Panic(err)
+	}
+	return newBlock.Hash
+}
+
