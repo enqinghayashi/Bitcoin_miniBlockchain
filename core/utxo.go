@@ -87,3 +87,58 @@ Work:
 	return accumulated, unspentOutputs
 }
 
+func NewUTXOTransaction(from, to string, amount int, bc *Blockchain, ws *wallet.Wallets) *Transaction {
+	if !wallet.ValidateAddress(from) || !wallet.ValidateAddress(to) {
+		log.Panic("invalid from/to address")
+	}
+
+	w, ok := ws.GetWallet(from)
+	if !ok {
+		log.Panic("sender wallet not found; createwallet first")
+	}
+
+	fromPubKeyHash := wallet.PubKeyHashFromAddress(from)
+	toPubKeyHash := wallet.PubKeyHashFromAddress(to)
+	if fromPubKeyHash == nil || toPubKeyHash == nil {
+		log.Panic("invalid address")
+	}
+
+	acc, validOutputs := bc.FindSpendableOutputs(fromPubKeyHash, amount)
+	if acc < amount {
+		log.Panic("not enough funds")
+	}
+
+	var inputs []TxInput
+	var outputs []TxOutput
+
+	for txidStr, outs := range validOutputs {
+		txIDBytes, err := hex.DecodeString(txidStr)
+		if err != nil {
+			log.Panic(err)
+		}
+		for _, outIdx := range outs {
+			input := TxInput{Txid: txIDBytes, Vout: outIdx, Signature: nil, PubKey: w.PublicKey}
+			inputs = append(inputs, input)
+		}
+	}
+
+	// outputs
+	outputs = append(outputs, TxOutput{Value: amount, PubKeyHash: append([]byte(nil), toPubKeyHash...)})
+	if acc > amount {
+		outputs = append(outputs, TxOutput{Value: acc - amount, PubKeyHash: append([]byte(nil), fromPubKeyHash...)})
+	}
+
+	tx := &Transaction{ID: nil, Vin: inputs, Vout: outputs}
+	tx.ID = tx.Hash()
+
+	bc.SignTransaction(tx, w.PrivateECDSA())
+
+	// Basic sanity: ensure each input matches the sender key.
+	for _, vin := range tx.Vin {
+		if !bytes.Equal(wallet.HashPubKey(vin.PubKey), fromPubKeyHash) {
+			log.Panic("input pubkey does not match sender")
+		}
+	}
+
+	return tx
+}
