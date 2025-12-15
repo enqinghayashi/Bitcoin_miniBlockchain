@@ -172,3 +172,59 @@ func handleConnection(conn net.Conn, bc *core.Blockchain) {
 	}
 }
 
+func sendReply(conn net.Conn, msg Message) {
+	enc := gob.NewEncoder(conn)
+	_ = enc.Encode(msg)
+}
+
+func encodePayload(v any) []byte {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(v); err != nil {
+		log.Panic(err)
+	}
+	return buf.Bytes()
+}
+
+func decodePayload(data []byte, out any) {
+	dec := gob.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(out); err != nil {
+		log.Panic(err)
+	}
+}
+
+func sendData(addr string, msg Message) {
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := gob.NewEncoder(conn)
+	_ = enc.Encode(msg)
+}
+
+// sendRequest sends a message and waits for a single reply message.
+func sendRequest(addr string, msg Message) (*Message, error) {
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := gob.NewEncoder(conn)
+	if err := enc.Encode(msg); err != nil {
+		return nil, err
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	dec := gob.NewDecoder(conn)
+	var reply Message
+	if err := dec.Decode(&reply); err != nil {
+		return nil, err
+	}
+	return &reply, nil
+}
+
+// SendTxRequest asks the running node at localhost:<nodeID> to construct/sign/mine a transaction.
+// This avoids opening BoltDB from the CLI process while startnode owns the DB.
