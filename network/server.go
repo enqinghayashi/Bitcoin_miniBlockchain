@@ -228,3 +228,59 @@ func sendRequest(addr string, msg Message) (*Message, error) {
 
 // SendTxRequest asks the running node at localhost:<nodeID> to construct/sign/mine a transaction.
 // This avoids opening BoltDB from the CLI process while startnode owns the DB.
+func SendTxRequest(nodeID string, from string, to string, amount int) (string, error) {
+	addr := fmt.Sprintf("localhost:%s", nodeID)
+	payload := TxRequest{AddrFrom: addr, From: from, To: to, Amount: amount}
+	reply, err := sendRequest(addr, Message{Command: "sendtx", Payload: encodePayload(payload)})
+	if err != nil {
+		return "", err
+	}
+	if reply.Command != "result" {
+		return "", fmt.Errorf("unexpected reply: %s", reply.Command)
+	}
+	var res Result
+	decodePayload(reply.Payload, &res)
+	if !res.OK {
+		return "", fmt.Errorf(res.Message)
+	}
+	return res.Message, nil
+}
+
+// GetBalanceRequest asks the running node at localhost:<nodeID> for an address balance.
+func GetBalanceRequest(nodeID string, address string) (int, error) {
+	addr := fmt.Sprintf("localhost:%s", nodeID)
+	payload := BalanceRequest{AddrFrom: addr, Address: address}
+	reply, err := sendRequest(addr, Message{Command: "getbalance", Payload: encodePayload(payload)})
+	if err != nil {
+		return 0, err
+	}
+	if reply.Command != "balance" {
+		return 0, fmt.Errorf("unexpected reply: %s", reply.Command)
+	}
+	var res BalanceResponse
+	decodePayload(reply.Payload, &res)
+	if !res.OK {
+		return 0, fmt.Errorf(res.Message)
+	}
+	return res.Balance, nil
+}
+
+// GetChainRequest asks the running node at localhost:<nodeID> for a chain snapshot to print.
+func GetChainRequest(nodeID string) ([]ChainBlock, string, error) {
+	addr := fmt.Sprintf("localhost:%s", nodeID)
+	payload := ChainRequest{AddrFrom: addr}
+	reply, err := sendRequest(addr, Message{Command: "getchain", Payload: encodePayload(payload)})
+	if err != nil {
+		return nil, "", err
+	}
+	if reply.Command != "chain" {
+		return nil, "", fmt.Errorf("unexpected reply: %s", reply.Command)
+	}
+	var res ChainResponse
+	decodePayload(reply.Payload, &res)
+	if !res.OK {
+		return nil, res.Message, fmt.Errorf(res.Message)
+	}
+	return res.Blocks, res.Message, nil
+}
+
