@@ -284,3 +284,105 @@ func GetChainRequest(nodeID string) ([]ChainBlock, string, error) {
 	return res.Blocks, res.Message, nil
 }
 
+func sendVersion(addr string, bc *core.Blockchain) {
+	payload := Version{Version: protocolVersion, BestHeight: bc.BestHeight(), AddrFrom: nodeAddress}
+	sendData(addr, Message{Command: "version", Payload: encodePayload(payload)})
+}
+
+func sendGetBlocks(addr string) {
+	payload := GetBlocks{AddrFrom: nodeAddress}
+	sendData(addr, Message{Command: "getblocks", Payload: encodePayload(payload)})
+}
+
+func sendInv(addr string, kind string, items [][]byte) {
+	payload := Inv{AddrFrom: nodeAddress, Type: kind, Items: items}
+	sendData(addr, Message{Command: "inv", Payload: encodePayload(payload)})
+}
+
+func sendGetData(addr string, kind string, id []byte) {
+	payload := GetData{AddrFrom: nodeAddress, Type: kind, ID: id}
+	sendData(addr, Message{Command: "getdata", Payload: encodePayload(payload)})
+}
+
+func sendBlock(addr string, blockBytes []byte) {
+	payload := BlockData{AddrFrom: nodeAddress, Block: blockBytes}
+	sendData(addr, Message{Command: "block", Payload: encodePayload(payload)})
+}
+
+func handleVersion(payloadBytes []byte, bc *core.Blockchain) {
+	var payload Version
+	decodePayload(payloadBytes, &payload)
+
+	myBestHeight := bc.BestHeight()
+	if myBestHeight < payload.BestHeight {
+		sendGetBlocks(payload.AddrFrom)
+	} else if myBestHeight > payload.BestHeight {
+		sendVersion(payload.AddrFrom, bc)
+	}
+}
+
+func handleGetBlocks(payloadBytes []byte, bc *core.Blockchain) {
+	var payload GetBlocks
+	decodePayload(payloadBytes, &payload)
+
+	hashes := bc.GetBlockHashes()
+	sendInv(payload.AddrFrom, "block", hashes)
+}
+
+func handleInv(payloadBytes []byte, bc *core.Blockchain) {
+	var payload Inv
+	decodePayload(payloadBytes, &payload)
+	if payload.Type != "block" {
+		return
+	}
+
+	// Request blocks we don't have, in the order provided.
+	blocksInTransit = nil
+	for _, h := range payload.Items {
+		if !bc.HasBlock(h) {
+			blocksInTransit = append(blocksInTransit, h)
+		}
+	}
+	if len(blocksInTransit) == 0 {
+		return
+	}
+
+	// Request the first missing block.
+	request := blocksInTransit[0]
+	blocksInTransit = blocksInTransit[1:]
+	sendGetData(payload.AddrFrom, "block", request)
+}
+
+func handleGetData(payloadBytes []byte, bc *core.Blockchain) {
+	var payload GetData
+	decodePayload(payloadBytes, &payload)
+	if payload.Type != "block" {
+		return
+	}
+
+	blockBytes, err := bc.GetBlock(payload.ID)
+	if err != nil {
+		return
+	}
+	sendBlock(payload.AddrFrom, blockBytes)
+}
+
+func handleBlock(payloadBytes []byte, bc *core.Blockchain) {
+	var payload BlockData
+	decodePayload(payloadBytes, &payload)
+
+	bc.PutBlock(payload.Block)
+
+	if len(blocksInTransit) > 0 {
+		next := blocksInTransit[0]
+		blocksInTransit = blocksInTransit[1:]
+		sendGetData(payload.AddrFrom, "block", next)
+		return
+	}
+
+	// After syncing, announce our version to the bootstrap so it can respond if needed.
+	if nodeAddress != knownNodes[0] {
+		sendVersion(knownNodes[0], bc)
+	}
+}
+
