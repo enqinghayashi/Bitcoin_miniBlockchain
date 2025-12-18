@@ -386,3 +386,126 @@ func handleBlock(payloadBytes []byte, bc *core.Blockchain) {
 	}
 }
 
+func handleSendTx(conn net.Conn, payloadBytes []byte, bc *core.Blockchain) {
+	var payload TxRequest
+	decodePayload(payloadBytes, &payload)
+
+	if payload.Amount <= 0 {
+		sendReply(conn, Message{Command: "result", Payload: encodePayload(Result{OK: false, Message: "amount must be > 0"})})
+		return
+	}
+	if !wallet.ValidateAddress(payload.From) || !wallet.ValidateAddress(payload.To) {
+		sendReply(conn, Message{Command: "result", Payload: encodePayload(Result{OK: false, Message: "invalid from/to address"})})
+		return
+	}
+
+	// Load wallets locally on the node and construct/sign the transaction.
+	ws, err := wallet.NewWallets()
+	if err != nil {
+		sendReply(conn, Message{Command: "result", Payload: encodePayload(Result{OK: false, Message: fmt.Sprintf("failed to load wallets: %v", err)})})
+		return
+	}
+
+	// Choose who receives coinbase. For usability, if the server wasn't started with -miner,
+	// fall back to paying the sender (previous project behavior).
+	coinbaseTo := minerAddr
+	if coinbaseTo == "" {
+		coinbaseTo = payload.From
+	}
+
+	// Create spend tx, mine into a block, persist, and broadcast.
+	var newTip []byte
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("%v", r)
+			}
+		}()
+		tx := core.NewUTXOTransaction(payload.From, payload.To, payload.Amount, bc, ws)
+		cb := core.CoinbaseTx(coinbaseTo, "")
+		newTip = bc.AddBlock([]*core.Transaction{cb, tx})
+	}()
+	if err != nil {
+		sendReply(conn, Message{Command: "result", Payload: encodePayload(Result{OK: false, Message: fmt.Sprintf("send failed: %v", err)})})
+		return
+	}
+
+	BroadcastNewBlock(currentNodeID(), newTip)
+
+	msg := "Success! Transaction accepted and mined into a new block by node."
+	if minerAddr == "" {
+		msg += " (coinbase paid to sender because no -miner was set)"
+	}
+	sendReply(conn, Message{Command: "result", Payload: encodePayload(Result{OK: true, Message: msg})})
+}
+
+func handleGetBalance(conn net.Conn, payloadBytes []byte, bc *core.Blockchain) {
+	var payload BalanceRequest
+	decodePayload(payloadBytes, &payload)
+
+	if !wallet.ValidateAddress(payload.Address) {
+		sendReply(conn, Message{Command: "balance", Payload: encodePayload(BalanceResponse{OK: false, Message: "invalid address"})})
+		return
+	}
+
+	pubKeyHash := wallet.PubKeyHashFromAddress(payload.Address)
+	UTXOs := bc.FindUTXO(pubKeyHash)
+	balance := 0
+	for _, out := range UTXOs {
+		balance += out.Value
+	}
+
+	sendReply(conn, Message{Command: "balance", Payload: encodePayload(BalanceResponse{OK: true, Balance: balance})})
+}
+
+func handleGetChain(conn net.Conn, payloadBytes []byte, bc *core.Blockchain) {
+	var payload ChainRequest
+	decodePayload(payloadBytes, &payload)
+
+	if len(bc.Tip()) == 0 {
+		sendReply(conn, Message{Command: "chain", Payload: encodePayload(ChainResponse{OK: true, Message: "chain is empty (no blocks yet)", Blocks: nil})})
+		return
+	}
+
+	it := bc.Iterator()
+	blocks := make([]ChainBlock, 0)
+	index := 0
+	for {
+		b := it.Next()
+		if b == nil {
+			break
+		}
+		txids := make([][]byte, 0, len(b.Transactions))
+		for _, tx := range b.Transactions {
+			txids = append(txids, append([]byte(nil), tx.ID...))
+		}
+		blocks = append(blocks, ChainBlock{
+			Index:     index,
+			Timestamp: b.Timestamp,
+			PrevHash:  append([]byte(nil), b.PrevBlockHash...),
+			Hash:      append([]byte(nil), b.Hash...),
+			Nonce:     b.Nonce,
+			Merkle:    append([]byte(nil), b.MerkleRoot...),
+			TxIDs:     txids,
+		})
+		index++
+		if len(b.PrevBlockHash) == 0 {
+			break
+		}
+	}
+
+	sendReply(conn, Message{Command: "chain", Payload: encodePayload(ChainResponse{OK: true, Blocks: blocks})})
+}
+
+// BroadcastNewBlock sends an inventory announcement to known peers.
+func BroadcastNewBlock(nodeID string, blockHash []byte) {
+	fromAddr := fmt.Sprintf("localhost:%s", nodeID)
+	items := [][]byte{blockHash}
+	for _, peer := range knownNodes {
+		if peer == fromAddr {
+			continue
+		}
+		payload := Inv{AddrFrom: fromAddr, Type: "block", Items: items}
+		sendData(peer, Message{Command: "inv", Payload: encodePayload(payload)})
+	}
+}
