@@ -112,3 +112,65 @@ func (c *CLI) printChain() {
 	}
 }
 
+func (c *CLI) getBalance(address string) {
+	if !wallet.ValidateAddress(address) {
+		fmt.Println("Invalid address")
+		return
+	}
+
+	// Ask the running node to compute balance.
+	balance, err := network.GetBalanceRequest(nodeID(), address)
+	if err == nil {
+		fmt.Printf("Balance of '%s': %d\n", address, balance)
+		return
+	}
+
+	// Fallback for offline/single-process usage.
+	if !core.DBExists(nodeID()) {
+		fmt.Println("No blockchain found. Run: createblockchain -address YOUR_ADDRESS")
+		return
+	}
+	bc := core.OpenBlockchainReadOnlyForNode(nodeID())
+	defer func() { _ = bc.Close() }()
+
+	pubKeyHash := wallet.PubKeyHashFromAddress(address)
+	UTXOs := bc.FindUTXO(pubKeyHash)
+	balance = 0
+	for _, out := range UTXOs {
+		balance += out.Value
+	}
+	fmt.Printf("Balance of '%s': %d\n", address, balance)
+}
+
+func (c *CLI) send(from, to string, amount int) {
+	if !wallet.ValidateAddress(from) || !wallet.ValidateAddress(to) {
+		fmt.Println("Invalid from/to address")
+		return
+	}
+
+	msg, err := network.SendTxRequest(nodeID(), from, to, amount)
+	if err != nil {
+		// Fallback for single-node/offline usage: mine locally if no server is running.
+		fmt.Println("Send via running node failed:", err)
+		fmt.Println("Falling back to local mining (startnode not required).")
+		if !core.DBExists(nodeID()) {
+			fmt.Println("No blockchain found. Run: createblockchain -address YOUR_ADDRESS")
+			return
+		}
+		ws, werr := wallet.NewWallets()
+		if werr != nil {
+			fmt.Println("Failed to load wallets:", werr)
+			return
+		}
+		bc := core.OpenBlockchainForNode(nodeID())
+		defer func() { _ = bc.Close() }()
+		tx := core.NewUTXOTransaction(from, to, amount, bc, ws)
+		cb := core.CoinbaseTx(from, "")
+		newTip := bc.AddBlock([]*core.Transaction{cb, tx})
+		fmt.Println("Success! Transaction mined into a new block.")
+		network.BroadcastNewBlock(nodeID(), newTip)
+		return
+	}
+	fmt.Println(msg)
+}
+
