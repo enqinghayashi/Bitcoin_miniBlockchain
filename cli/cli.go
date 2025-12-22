@@ -174,3 +174,117 @@ func (c *CLI) send(from, to string, amount int) {
 	fmt.Println(msg)
 }
 
+func (c *CLI) startNode(miner string) {
+	if miner != "" && !wallet.ValidateAddress(miner) {
+		fmt.Println("Invalid miner address")
+		return
+	}
+	network.StartServer(nodeID(), miner)
+}
+
+func (c *CLI) createWallet() {
+	ws, err := wallet.NewWallets()
+	if err != nil {
+		fmt.Println("Failed to load wallets:", err)
+		return
+	}
+	address, err := ws.CreateWallet()
+	if err != nil {
+		fmt.Println("Failed to create wallet:", err)
+		return
+	}
+	fmt.Println("New address:", address)
+}
+
+func (c *CLI) listAddresses() {
+	ws, err := wallet.NewWallets()
+	if err != nil {
+		fmt.Println("Failed to load wallets:", err)
+		return
+	}
+	for _, addr := range ws.GetAddresses() {
+		fmt.Println(addr)
+	}
+}
+
+func (c *CLI) Run() {
+	c.validateArgs()
+
+	createBlockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
+	printChainCmd := flag.NewFlagSet("printchain", flag.ExitOnError)
+	getBalanceCmd := flag.NewFlagSet("getbalance", flag.ExitOnError)
+	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
+	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
+	listAddressesCmd := flag.NewFlagSet("listaddresses", flag.ExitOnError)
+	startNodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
+
+	createBlockchainAddress := createBlockchainCmd.String("address", "", "The address to receive genesis reward (not used yet)")
+	getBalanceAddress := getBalanceCmd.String("address", "", "The address")
+	sendFrom := sendCmd.String("from", "", "Source address")
+	sendTo := sendCmd.String("to", "", "Destination address")
+	sendAmount := sendCmd.Int("amount", 0, "Amount to send")
+	startNodeMiner := startNodeCmd.String("miner", "", "Miner address (optional)")
+
+	switch os.Args[1] {
+	case "createwallet":
+		_ = createWalletCmd.Parse(os.Args[2:])
+	case "listaddresses":
+		_ = listAddressesCmd.Parse(os.Args[2:])
+	case "createblockchain":
+		_ = createBlockchainCmd.Parse(os.Args[2:])
+	case "printchain":
+		_ = printChainCmd.Parse(os.Args[2:])
+	case "getbalance":
+		_ = getBalanceCmd.Parse(os.Args[2:])
+	case "send":
+		_ = sendCmd.Parse(os.Args[2:])
+	case "startnode":
+		_ = startNodeCmd.Parse(os.Args[2:])
+	default:
+		c.printUsage()
+		os.Exit(1)
+	}
+
+	if createBlockchainCmd.Parsed() {
+		if *createBlockchainAddress == "" {
+			fmt.Println("Error: -address is required")
+			createBlockchainCmd.Usage()
+			os.Exit(1)
+		}
+		c.createBlockchain(*createBlockchainAddress)
+	}
+
+	if createWalletCmd.Parsed() {
+		c.createWallet()
+	}
+
+	if listAddressesCmd.Parsed() {
+		c.listAddresses()
+	}
+
+	if printChainCmd.Parsed() {
+		c.printChain()
+	}
+
+	if getBalanceCmd.Parsed() {
+		if *getBalanceAddress == "" {
+			fmt.Println("Error: -address is required")
+			getBalanceCmd.Usage()
+			os.Exit(1)
+		}
+		c.getBalance(*getBalanceAddress)
+	}
+
+	if sendCmd.Parsed() {
+		if *sendFrom == "" || *sendTo == "" || *sendAmount <= 0 {
+			fmt.Println("Error: -from, -to, and -amount (>0) are required")
+			sendCmd.Usage()
+			os.Exit(1)
+		}
+		c.send(*sendFrom, *sendTo, *sendAmount)
+	}
+
+	if startNodeCmd.Parsed() {
+		c.startNode(*startNodeMiner)
+	}
+}
